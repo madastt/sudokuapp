@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta charset="UTF-8">
+    <title>Sudoku</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f0f0f0; margin: 0; padding: 10px; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+        h1 { color: #333; margin-top: 5px; margin-bottom: 5px; font-size: 22px; }
+
+        .controls { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        select { padding: 6px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; font-weight: bold;}
+
+        .grid-container { width: 95vw; max-width: 400px; aspect-ratio: 1; margin: 0 auto 15px auto; }
+        table { width: 100%; height: 100%; border-collapse: collapse; background: white; border: 2px solid #333; table-layout: fixed; }
+
+        /* Zmienione właściwości dla komórek tabeli by zapobiec znikającemu wierszowi (bug w WebView) */
+        td { border: 1px solid #ccc; padding: 0; cursor: pointer; height: 11.11%; }
+        td.border-right { border-right: 2px solid #333; }
+        td.border-bottom { border-bottom: 2px solid #333; }
+        td.selected { background-color: #b3d4ff; }
+        td.invalid { background-color: #ffe0e0; }
+        td.selected.invalid { background-color: #ffb3b3; }
+        td.fixed { background-color: #eee; }
+
+        /* Wewnętrzny wrapper komórki zapewnia, że absolutnie pozycjonowane notatki nie wylewają się i nie psują tabeli */
+        .cell-wrapper { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+
+        .main-val { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; font-size: 24px; font-weight: bold; color: #0044cc; }
+        td.fixed .main-val { color: #333; }
+
+        .corner-notes { position: absolute; inset: 2px; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); font-size: 12px; color: #555; pointer-events: none; }
+        .corner-notes div { display: flex; align-items: center; justify-content: center; line-height: 1; font-weight: bold; }
+
+        .center-notes { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: bold; color: #007bff; pointer-events: none; text-align: center; padding: 15%; word-break: break-all; line-height: 1.1; }
+
+        .modes { display: flex; justify-content: center; gap: 10px; width: 95vw; max-width: 400px; margin-bottom: 10px; }
+        .modes button { flex: 1; padding: 8px 0; background: #ddd; color: #333; border-radius: 5px; font-weight: bold; border: 2px solid transparent; cursor: pointer; font-size: 14px;}
+        .modes button.active { background: #007bff; color: white; border-color: #0056b3; }
+
+        .numpad { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; width: 95vw; max-width: 400px; margin-bottom: 15px; }
+        .numpad button { padding: 15px 0; font-size: 22px; font-weight: bold; background: #fff; border: 1px solid #ccc; border-radius: 5px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .numpad button:active { background: #eee; transform: translateY(1px); box-shadow: none; }
+        .numpad button.del { background: #ff4d4d; color: white; border: none; }
+
+        .top-buttons { display: flex; gap: 10px; margin-bottom: 10px; }
+        .btn-action { padding: 8px 16px; font-size: 14px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .btn-action.new-game { background: #dc3545; }
+    </style>
+</head>
+<body>
+    <h1>Sudoku</h1>
+
+    <div class="controls">
+        <label for="difficulty" style="display:none;">Trudność</label>
+        <select id="difficulty" aria-label="Wybierz trudność">
+            <option value="easy">Łatwy</option>
+            <option value="medium">Średni</option>
+            <option value="hard" selected>Trudny</option>
+            <option value="infernal">Piekielnie trudny</option>
+        </select>
+        <div class="top-buttons">
+            <button class="btn-action" onclick="check()">Sprawdź</button>
+            <button class="btn-action new-game" onclick="newGame()">Nowa Gra</button>
+        </div>
+    </div>
+
+    <div class="grid-container">
+        <table id="grid"></table>
+    </div>
+
+    <div class="modes">
+        <button id="mode-normal" class="active" onclick="setMode('normal')">Wpisz</button>
+        <button id="mode-corner" onclick="setMode('corner')">Notatki: Rogi</button>
+        <button id="mode-center" onclick="setMode('center')">Notatki: Środek</button>
+    </div>
+
+    <div class="numpad">
+        <button onclick="onNumpad(1)">1</button>
+        <button onclick="onNumpad(2)">2</button>
+        <button onclick="onNumpad(3)">3</button>
+        <button onclick="onNumpad(4)">4</button>
+        <button onclick="onNumpad(5)">5</button>
+        <button onclick="onNumpad(6)">6</button>
+        <button onclick="onNumpad(7)">7</button>
+        <button onclick="onNumpad(8)">8</button>
+        <button onclick="onNumpad(9)">9</button>
+        <button class="del" onclick="onNumpad('X')">⌫</button>
+    </div>
+
+    <script>
+        const grid = document.getElementById('grid');
+        let solution = [];
+        let cellsData = [];
+        let selectedIdx = null;
+        let currentMode = 'normal';
+
+        // Układ notatek w rogach - odpowiada logice np. z SudokuPad
+        // Kolumny i wiersze (grid-row, grid-column) w formacie: [Row, Col]
+        const cornerPositions = [
+            [1, 1], // Pozycja 1: Lewy-Góra
+            [1, 3], // Pozycja 2: Prawy-Góra
+            [3, 1], // Pozycja 3: Lewy-Dół
+            [3, 3], // Pozycja 4: Prawy-Dół
+            [1, 2], // Pozycja 5: Środek-Góra
+            [3, 2], // Pozycja 6: Środek-Dół
+            [2, 1], // Pozycja 7: Środek-Lewo
+            [2, 3], // Pozycja 8: Środek-Prawo
+            [2, 2]  // Pozycja 9: Zwykły Środek (awaryjnie dla >8 notatek)
+        ];
+
+        const baseSolution = [
+            [5,3,4,6,7,8,9,1,2],
+            [6,7,2,1,9,5,3,4,8],
+            [1,9,8,3,4,2,5,6,7],
+            [8,5,9,7,6,1,4,2,3],
+            [4,2,6,8,5,3,7,9,1],
+            [7,1,3,9,2,4,8,5,6],
+            [9,6,1,5,3,7,2,8,4],
+            [2,8,7,4,1,9,6,3,5],
+            [3,4,5,2,8,6,1,7,9]
+        ];
+
+        function shuffleBoard(boardToShuffle) {
+            let newBoard = boardToShuffle.map(row => [...row]);
+            let nums = [1,2,3,4,5,6,7,8,9];
+            for (let i = nums.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [nums[i], nums[j]] = [nums[j], nums[i]];
+            }
+            let map = {};
+            for(let i=0; i<9; i++) map[i+1] = nums[i];
+            for(let r=0; r<9; r++) for(let c=0; c<9; c++) newBoard[r][c] = map[newBoard[r][c]];
+
+            for (let block = 0; block < 3; block++) {
+                let r1 = block * 3 + Math.floor(Math.random() * 3);
+                let r2 = block * 3 + Math.floor(Math.random() * 3);
+                let temp = newBoard[r1]; newBoard[r1] = newBoard[r2]; newBoard[r2] = temp;
+            }
+            for (let block = 0; block < 3; block++) {
+                let c1 = block * 3 + Math.floor(Math.random() * 3);
+                let c2 = block * 3 + Math.floor(Math.random() * 3);
+                for (let r = 0; r < 9; r++) {
+                    let temp = newBoard[r][c1]; newBoard[r][c1] = newBoard[r][c2]; newBoard[r][c2] = temp;
+                }
+            }
+            return newBoard;
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.getElementById('mode-normal').classList.remove('active');
+            document.getElementById('mode-corner').classList.remove('active');
+            document.getElementById('mode-center').classList.remove('active');
+            document.getElementById('mode-' + mode).classList.add('active');
+        }
+
+        function generateSudoku() {
+            solution = shuffleBoard(baseSolution);
+            let board = solution.map(row => [...row]);
+            let difficulty = document.getElementById('difficulty').value;
+            let removeCount = 52;
+            if (difficulty === 'easy') removeCount = 30;
+            if (difficulty === 'medium') removeCount = 42;
+            if (difficulty === 'hard') removeCount = 52;
+            if (difficulty === 'infernal') removeCount = 62;
+
+            let removed = 0;
+            while(removed < removeCount) {
+                let r = Math.floor(Math.random() * 9);
+                let c = Math.floor(Math.random() * 9);
+                if (board[r][c] !== 0) {
+                    board[r][c] = 0;
+                    removed++;
+                }
+            }
+
+            cellsData = [];
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    cellsData.push({
+                        val: board[r][c],
+                        fixed: board[r][c] !== 0,
+                        center: [],
+                        corner: [],
+                        error: false
+                    });
+                }
+            }
+        }
+
+        function renderBoard() {
+            grid.innerHTML = '';
+            for (let r = 0; r < 9; r++) {
+                let tr = document.createElement('tr');
+                for (let c = 0; c < 9; c++) {
+                    let idx = r * 9 + c;
+                    let cellData = cellsData[idx];
+                    let td = document.createElement('td');
+
+                    if (c % 3 === 2 && c !== 8) td.classList.add('border-right');
+                    if (r % 3 === 2 && r !== 8) td.classList.add('border-bottom');
+                    if (idx === selectedIdx) td.classList.add('selected');
+                    if (cellData.error) td.classList.add('invalid');
+                    if (cellData.fixed) td.classList.add('fixed');
+
+                    // Używamy cell-wrapper aby obejść bugi rysowania tabeli w niektórych starszych/systemowych WebView
+                    let wrapper = document.createElement('div');
+                    wrapper.className = 'cell-wrapper';
+
+                    if (cellData.fixed || cellData.val !== 0) {
+                        wrapper.innerHTML = `<div class="main-val">${cellData.val}</div>`;
+                    } else {
+                        // Notatki na narożnikach
+                        let cornerStr = [...cellData.corner].sort((a,b) => a - b);
+                        let cornerHTML = '<div class="corner-notes">';
+                        for (let i = 0; i < cornerStr.length; i++) {
+                            if (i < cornerPositions.length) {
+                                let pos = cornerPositions[i];
+                                cornerHTML += `<div style="grid-row: ${pos[0]}; grid-column: ${pos[1]};">${cornerStr[i]}</div>`;
+                            }
+                        }
+                        cornerHTML += '</div>';
+
+                        // Notatki pośrodku
+                        let centerStr = [...cellData.center].sort((a,b) => a - b).join('');
+                        let centerHTML = `<div class="center-notes">${centerStr}</div>`;
+
+                        wrapper.innerHTML = cornerHTML + centerHTML;
+                    }
+
+                    td.appendChild(wrapper);
+                    td.onclick = () => {
+                        selectedIdx = idx;
+                        renderBoard();
+                    };
+                    tr.appendChild(td);
+                }
+                grid.appendChild(tr);
+            }
+        }
+
+        function onNumpad(num) {
+            if (selectedIdx === null) return;
+            let cell = cellsData[selectedIdx];
+            if (cell.fixed) return;
+
+            cell.error = false;
+
+            if (num === 'X') {
+                cell.val = 0;
+                saveState();
+                renderBoard();
+                return;
+            }
+
+            if (currentMode === 'normal') {
+                cell.val = cell.val === num ? 0 : num;
+            } else if (currentMode === 'center') {
+                if (cell.val !== 0) return;
+                let idx = cell.center.indexOf(num);
+                if (idx > -1) cell.center.splice(idx, 1);
+                else cell.center.push(num);
+            } else if (currentMode === 'corner') {
+                if (cell.val !== 0) return;
+                let idx = cell.corner.indexOf(num);
+                if (idx > -1) cell.corner.splice(idx, 1);
+                else cell.corner.push(num);
+            }
+
+            saveState();
+            renderBoard();
+        }
+
+        function check() {
+            let allCorrect = true;
+            let anyEmpty = false;
+
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    let idx = r * 9 + c;
+                    let cell = cellsData[idx];
+
+                    if (cell.val === 0) {
+                        anyEmpty = true;
+                        cell.error = false;
+                    } else if (cell.val !== solution[r][c]) {
+                        allCorrect = false;
+                        cell.error = true;
+                    } else {
+                        cell.error = false;
+                    }
+                }
+            }
+
+            saveState();
+            renderBoard();
+
+            if (!anyEmpty && allCorrect) {
+                setTimeout(() => alert('Gratulacje! Rozwiązałeś to Sudoku!'), 100);
+            } else if (anyEmpty) {
+                setTimeout(() => alert('Wypełnij wszystkie puste pola!'), 100);
+            }
+        }
+
+        function saveState() {
+            const state = {
+                solution: solution,
+                cellsData: cellsData,
+                difficulty: document.getElementById('difficulty').value
+            };
+            localStorage.setItem('sudokuSave', JSON.stringify(state));
+        }
+
+        function loadState() {
+            const saved = localStorage.getItem('sudokuSave');
+            if (saved) {
+                try {
+                    const state = JSON.parse(saved);
+                    solution = state.solution;
+                    cellsData = state.cellsData;
+                    document.getElementById('difficulty').value = state.difficulty;
+                    renderBoard();
+                    return true;
+                } catch (e) {
+                    console.error("Nie udało się wczytać zapisu", e);
+                }
+            }
+            return false;
+        }
+
+        function newGame() {
+            selectedIdx = null;
+            generateSudoku();
+            saveState();
+            renderBoard();
+        }
+
+        document.getElementById('difficulty').addEventListener('change', newGame);
+
+        if (!loadState()) {
+            newGame();
+        }
+    </script>
+</body>
+</html>
